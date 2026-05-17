@@ -29,4 +29,5 @@ echo "Secret '$SECRET_NAME' created in namespace '$NAMESPACE'."
 
 # Clean up local files
 rm -f tls.crt tls.key
-echo "Done. Add '$DOMAIN' to /etc/hosts pointing to your cluster IP."
+echo "Done. Add '$DOMAIN' to your hosts file pointing to: $(minikube ip)"
+echo "Windows: Add-Content -Path 'C:\Windows\System32\drivers\etc\hosts' -Value '$(minikube ip)  $DOMAIN'"

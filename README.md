@@ -27,30 +27,19 @@ wisecow/
 
 ---
 
-## 🚀 Quick Start (Local – Minikube / Kind)
+## 🚀 Quick Start (Local – Minikube + VirtualBox)
 
 ### 1. Prerequisites
 
-```bash
-# Minikube
-minikube start --driver=docker
-minikube addons enable ingress
+- Install [VirtualBox](https://www.virtualbox.org/wiki/Downloads) — click **Windows hosts**
+- Install [Minikube](https://minikube.sigs.k8s.io/docs/start/)
+- Install [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl-windows/)
 
-# Or Kind
-kind create cluster --name wisecow
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
-```
-
-### 2. Build & load the image locally
+### 2. Start Minikube
 
 ```bash
-docker build -t wisecow:local .
-
-# Minikube
-minikube image load wisecow:local
-
-# Kind
-kind load docker-image wisecow:local --name wisecow
+minikube start --driver=virtualbox
+minikube status
 ```
 
 ### 3. Deploy
@@ -61,15 +50,18 @@ kubectl apply -f k8s/deployment.yaml
 kubectl apply -f k8s/service.yaml
 ```
 
-### 4. Access
+### 4. Check pods are running
 
 ```bash
-# Minikube
-minikube service wisecow-service -n wisecow
+kubectl get pods -n wisecow
+# Wait until STATUS shows Running and READY shows 1/1
+```
 
-# Kind – port-forward
-kubectl port-forward svc/wisecow-service 4499:80 -n wisecow
-# then open http://localhost:4499
+### 5. Open the app in browser
+
+```bash
+minikube service wisecow-service -n wisecow
+# Automatically opens browser with the wisecow app
 ```
 
 ---
@@ -93,7 +85,8 @@ kubectl apply -f k8s/ingress.yaml
 
 ```bash
 bash tls/generate-tls-secret.sh wisecow.local
-echo "$(minikube ip)  wisecow.local" | sudo tee -a /etc/hosts
+# Add to hosts file (PowerShell as Admin on Windows)
+Add-Content -Path "C:\Windows\System32\drivers\etc\hosts" -Value "$(minikube ip)  wisecow.local"
 ```
 
 ---
@@ -112,7 +105,12 @@ echo "$(minikube ip)  wisecow.local" | sudo tee -a /etc/hosts
 
 | Secret | How to get it |
 |--------|---------------|
-| `KUBE_CONFIG` | Run `base64 -w 0 ~/.kube/config` and paste the output |
+| `KUBE_CONFIG` | Run the command below in PowerShell and paste the output |
+
+```powershell
+# Windows PowerShell — copies base64 kubeconfig to clipboard
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("$HOME\.kube\config")) | Set-Clipboard
+```
 
 Add it at: `https://github.com/mohamedaakhil/wisecow/settings/secrets/actions`
 
