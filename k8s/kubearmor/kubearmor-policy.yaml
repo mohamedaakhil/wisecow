@@ -58,11 +58,12 @@ spec:
         action: Block
       - path: /etc/sudoers
         action: Block
-      - path: /root/.ssh/
-        action: Block
       - path: /proc/sysrq-trigger
         action: Block
     matchDirectories:
+      - dir: /root/.ssh/
+        recursive: true
+        action: Block
       - dir: /etc/kubernetes/
         action: Block
       - dir: /var/run/secrets/kubernetes.io/
