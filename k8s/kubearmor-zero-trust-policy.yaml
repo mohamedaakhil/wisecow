@@ -1,0 +1,264 @@
+# =============================================================================
+# Zero-Trust KubeArmor Security Policy Suite
+# Project   : wisecow (https://github.com/mohamedaakhil/wisecow)
+# Namespace  : wisecow
+# Selector   : app=wisecow
+# Base image : ubuntu:22.04
+# Runtime    : bash + socat/nc (network) + cowsay + fortune
+# Port       : 4499 (HTTP plain or TLS via socat)
+#
+# Zero-Trust principle: deny everything by default.
+# Policies 1-2 use action: Allow, which flips KubeArmor into
+# "least-permissive mode" – every process/file NOT in the allowlist is
+# automatically blocked without needing an explicit Block rule.
+# Policies 3-7 add explicit Block rules for the highest-risk attack vectors.
+# =============================================================================
+
+---
+# -----------------------------------------------------------------------------
+# POLICY 1 – PROCESS ALLOWLIST  (Least-Permissive / Zero-Trust core)
+#
+# wisecow.sh uses exactly these binaries at runtime:
+#   /usr/bin/env        – shebang interpreter
+#   /bin/bash           – shell that runs wisecow.sh
+#   /usr/games/cowsay   – renders the cow art
+#   /usr/bin/fortune    – generates random wisdom (fortune-mod package)
+#   /usr/bin/nc         – netcat for plain-HTTP listener
+#   /usr/bin/socat      – TLS listener (socat package)
+#   /bin/rm             – rm -f $RSPFILE on startup
+#   /usr/bin/mkfifo     – creates the named response FIFO
+#   /bin/cat            – cat $RSPFILE in the request loop
+#   /bin/sleep          – sleep 0.01 between requests
+#
+# Once ANY Allow policy exists KubeArmor denies every other binary.
+# -----------------------------------------------------------------------------
+apiVersion: security.kubearmor.com/v1
+kind: KubeArmorPolicy
+metadata:
+  name: zt-wisecow-allow-process-whitelist
+  namespace: wisecow
+  annotations:
+    policy.kubearmor.io/description: >
+      Zero-Trust process allowlist for the wisecow pod.
+      Only the exact binaries required by wisecow.sh are permitted.
+      All other executables are denied at the eBPF/LSM layer.
+spec:
+  tags: ["zero-trust", "wisecow", "process", "allowlist", "least-permissive"]
+  message: "ZT VIOLATION: Unauthorised process execution blocked in wisecow pod"
+  severity: 7
+  selector:
+    matchLabels:
+      app: wisecow
+  process:
+    matchPaths:
+      - path: /usr/bin/env         # shebang entrypoint
+      - path: /bin/bash            # main shell runtime
+      - path: /usr/games/cowsay    # cow art renderer
+      - path: /usr/bin/fortune     # wisdom generator
+      - path: /usr/bin/nc          # netcat plain-HTTP listener
+      - path: /usr/bin/ncat        # ncat alias (some builds)
+      - path: /usr/bin/socat       # TLS listener
+      - path: /bin/rm              # rm -f response fifo on start
+      - path: /usr/bin/mkfifo      # named pipe creation
+      - path: /bin/cat             # cat $RSPFILE in request loop
+      - path: /bin/sleep           # sleep 0.01 inter-request delay
+  action: Allow   # triggers least-permissive (deny-all) mode for the pod
+
+---
+# -----------------------------------------------------------------------------
+# POLICY 2 – BLOCK KUBERNETES SERVICE-ACCOUNT TOKEN ACCESS
+#
+# The auto-mounted K8s service account token is the primary pivot point
+# to the API server if an attacker gains execution inside the pod.
+# Block it unconditionally – wisecow.sh never needs it.
+# -----------------------------------------------------------------------------
+apiVersion: security.kubearmor.com/v1
+kind: KubeArmorPolicy
+metadata:
+  name: zt-wisecow-block-sa-token
+  namespace: wisecow
+  annotations:
+    policy.kubearmor.io/description: >
+      Block all access to the auto-mounted Kubernetes service account token.
+      Prevents a compromised wisecow pod from pivoting to the K8s API.
+spec:
+  tags: ["zero-trust", "wisecow", "k8s-api", "lateral-movement"]
+  message: "ZT VIOLATION: K8s service-account token read blocked – possible API pivot"
+  severity: 10
+  selector:
+    matchLabels:
+      app: wisecow
+  file:
+    matchDirectories:
+      - dir: /run/secrets/kubernetes.io/serviceaccount/
+        recursive: true
+  action: Block
+
+---
+# -----------------------------------------------------------------------------
+# POLICY 3 – BLOCK PACKAGE MANAGERS & DOWNLOAD TOOLS
+#
+# ubuntu:22.04 ships apt, curl, wget, python3 etc.
+# Blocking them prevents an attacker from downloading payloads at runtime.
+# -----------------------------------------------------------------------------
+apiVersion: security.kubearmor.com/v1
+kind: KubeArmorPolicy
+metadata:
+  name: zt-wisecow-block-pkg-managers
+  namespace: wisecow
+  annotations:
+    policy.kubearmor.io/description: >
+      Block package managers and download tools to prevent runtime
+      supply-chain attacks on the wisecow pod.
+spec:
+  tags: ["zero-trust", "wisecow", "supply-chain", "block"]
+  message: "ZT VIOLATION: Package manager / download tool execution blocked"
+  severity: 9
+  selector:
+    matchLabels:
+      app: wisecow
+  process:
+    matchPaths:
+      - path: /usr/bin/apt
+      - path: /usr/bin/apt-get
+      - path: /usr/bin/apt-cache
+      - path: /usr/bin/dpkg
+      - path: /usr/bin/curl
+      - path: /usr/bin/wget
+      - path: /usr/bin/python3
+      - path: /usr/bin/python
+      - path: /usr/bin/pip3
+  action: Block
+
+---
+# -----------------------------------------------------------------------------
+# POLICY 4 – PROTECT SYSTEM DIRECTORIES (Read-Only Enforcement)
+#
+# wisecow.sh only writes to /app/response (the FIFO).
+# Any runtime writes to OS directories are a clear indicator of compromise.
+# -----------------------------------------------------------------------------
+apiVersion: security.kubearmor.com/v1
+kind: KubeArmorPolicy
+metadata:
+  name: zt-wisecow-protect-system-dirs
+  namespace: wisecow
+  annotations:
+    policy.kubearmor.io/description: >
+      Enforce read-only on all OS directories. wisecow only legitimately
+      writes to its named FIFO at /app/response.
+spec:
+  tags: ["zero-trust", "wisecow", "file-integrity", "immutability"]
+  message: "ZT VIOLATION: Write to system directory blocked in wisecow pod"
+  severity: 8
+  selector:
+    matchLabels:
+      app: wisecow
+  file:
+    matchDirectories:
+      - dir: /bin/
+        readOnly: true
+      - dir: /sbin/
+        readOnly: true
+      - dir: /usr/bin/
+        readOnly: true
+      - dir: /usr/sbin/
+        readOnly: true
+      - dir: /usr/games/
+        readOnly: true
+      - dir: /etc/
+        readOnly: true
+        recursive: true
+      - dir: /lib/
+        readOnly: true
+        recursive: true
+      - dir: /usr/lib/
+        readOnly: true
+        recursive: true
+  action: Block
+
+---
+# -----------------------------------------------------------------------------
+# POLICY 5 – BLOCK SHELL HISTORY TAMPERING
+#
+# Attackers clear ~/.bash_history to erase forensic evidence.
+# Block all writes to shell history files.
+# -----------------------------------------------------------------------------
+apiVersion: security.kubearmor.com/v1
+kind: KubeArmorPolicy
+metadata:
+  name: zt-wisecow-block-history-tamper
+  namespace: wisecow
+  annotations:
+    policy.kubearmor.io/description: >
+      Block modifications to shell history files to prevent attackers
+      from covering their tracks (anti-forensics).
+spec:
+  tags: ["zero-trust", "wisecow", "forensics", "anti-tamper"]
+  message: "ZT VIOLATION: Shell history modification blocked – possible anti-forensic attempt"
+  severity: 6
+  selector:
+    matchLabels:
+      app: wisecow
+  file:
+    matchPaths:
+      - path: /root/.bash_history
+      - path: /root/.sh_history
+  action: Block
+
+---
+# -----------------------------------------------------------------------------
+# POLICY 6 – BLOCK RAW NETWORK SOCKETS
+#
+# wisecow only needs TCP on port 4499 (via nc or socat).
+# Raw sockets would enable ARP spoofing, ICMP floods, and network scanning.
+# -----------------------------------------------------------------------------
+apiVersion: security.kubearmor.com/v1
+kind: KubeArmorPolicy
+metadata:
+  name: zt-wisecow-block-raw-sockets
+  namespace: wisecow
+  annotations:
+    policy.kubearmor.io/description: >
+      Block raw network socket creation. wisecow needs only TCP on port
+      4499; raw sockets would allow network-level attacks from the pod.
+spec:
+  tags: ["zero-trust", "wisecow", "network", "raw-socket"]
+  message: "ZT VIOLATION: Raw network socket creation blocked in wisecow pod"
+  severity: 8
+  selector:
+    matchLabels:
+      app: wisecow
+  network:
+    matchProtocols:
+      - protocol: raw
+  action: Block
+
+---
+# -----------------------------------------------------------------------------
+# POLICY 7 – AUDIT TLS CERTIFICATE ACCESS
+#
+# Log every access to the /certs/ mount point. Legitimate reads only
+# happen at socat startup; any other reads warrant investigation.
+# action: Audit – generates alerts without disrupting TLS.
+# -----------------------------------------------------------------------------
+apiVersion: security.kubearmor.com/v1
+kind: KubeArmorPolicy
+metadata:
+  name: zt-wisecow-audit-tls-certs
+  namespace: wisecow
+  annotations:
+    policy.kubearmor.io/description: >
+      Audit all access to TLS certificate and key files mounted at /certs/.
+      Unexpected reads outside of socat startup should be investigated.
+spec:
+  tags: ["zero-trust", "wisecow", "audit", "tls", "secrets"]
+  message: "ZT AUDIT: TLS certificate/key accessed in wisecow pod"
+  severity: 5
+  selector:
+    matchLabels:
+      app: wisecow
+  file:
+    matchDirectories:
+      - dir: /certs/
+        recursive: true
+  action: Audit
